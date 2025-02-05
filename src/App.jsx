@@ -102,6 +102,22 @@ function App() {
     setShowThinking(false)
   }
 
+  function formatStepLabel(step) {
+    if (!step) return "Progress update"
+    if (typeof step.step === 'number') {
+      return `Step ${step.step}:`
+    }
+    if (typeof step.step === 'string') {
+      return `${step.step.charAt(0).toUpperCase() + step.step.slice(1)}:`
+    }
+    return "Progress update:"
+  }
+
+  function formatActionState(trackers) {
+    if (!trackers?.actionState?.action) return ""
+    return trackers.actionState.action
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!query.trim() || !currentConversationId) return
@@ -129,7 +145,7 @@ function App() {
     setThinking([])
     setShowThinking(false)
     setLoading(true)
-    setDebugLogs([]) // Reset debug logs for new query
+    setDebugLogs([])
 
     try {
       const res = await fetch('http://localhost:3000/api/v1/query', {
@@ -142,29 +158,71 @@ function App() {
         })
       })
       const data = await res.json()
-      setDebugLogs(prev => [...prev, { type: 'initial-response', data }])
+      
+      const timestamp = new Date().toISOString()
+      setDebugLogs(prev => [...prev, { 
+        type: 'initial-response', 
+        timestamp,
+        data 
+      }])
 
       if (data.requestId) {
         const eventSource = new EventSource(`http://localhost:3000/api/v1/stream/${data.requestId}`)
         
         eventSource.onmessage = (event) => {
-          setDebugLogs(prev => [...prev, { type: 'sse-event', data: event.data }])
-          const parsed = JSON.parse(event.data)
+          const timestamp = new Date().toISOString()
+          let parsed
           
-          if (parsed.type === "progress") {
-            setThinking(prev => [...prev, parsed])
+          try {
+            parsed = JSON.parse(event.data)
+          } catch (err) {
+            console.error('Failed to parse SSE data:', err)
+            setDebugLogs(prev => [...prev, {
+              type: 'sse-parse-error',
+              timestamp,
+              error: err.toString(),
+              rawData: event.data
+            }])
+            return
+          }
+
+          // Log all events for debugging
+          setDebugLogs(prev => [...prev, { 
+            type: 'sse-event', 
+            timestamp,
+            data: event.data,
+            parsed 
+          }])
+
+          // Handle progress updates
+          if (parsed.type === "progress" && parsed.step) {
+            const progressStep = {
+              ...parsed,
+              timestamp,
+              formattedStep: formatStepLabel(parsed),
+              formattedAction: formatActionState(parsed.trackers)
+            }
+            setThinking(prev => [...prev, progressStep])
+            return
           }
           
           // Handle final answer
-          if ((parsed.type === "progress" || parsed.type === "final") && 
-              parsed.answer && (parsed.references || parsed.evaluation)) {
+          if (parsed.type === "final" && parsed.answer) {
+            const references = Array.isArray(parsed.references) 
+              ? parsed.references 
+              : (typeof parsed.references === 'object' ? [parsed.references] : [])
+
             const finalBotMessage = {
               id: uuidv4(),
               type: 'bot',
               text: parsed.answer,
-              references: parsed.references,
+              references: references.map(ref => ({
+                url: ref.url || '#',
+                exactQuote: ref.exactQuote || ref.text || 'Reference'
+              })),
               evaluation: parsed.evaluation,
               thoughts: parsed.thoughts,
+              timestamp
             }
             
             setConversations(prev => prev.map(conv => {
@@ -178,8 +236,19 @@ function App() {
               return conv
             }))
             
+            // Clear thinking state and close connection
+            setThinking([])
             eventSource.close()
             setLoading(false)
+
+            // Add final state to debug logs
+            setDebugLogs(prev => [...prev, {
+              type: 'final-state',
+              timestamp,
+              thinking: [],
+              finalMessage: finalBotMessage
+            }])
+            return
           }
           
           // Handle error
@@ -187,8 +256,10 @@ function App() {
             const errorMessage = {
               id: uuidv4(),
               type: 'bot',
-              text: `Error: ${parsed.message}`,
+              text: `Error: ${parsed.message || 'Unknown error occurred'}`,
+              timestamp
             }
+
             setConversations(prev => prev.map(conv => {
               if (conv.id === currentConversationId) {
                 return {
@@ -199,19 +270,37 @@ function App() {
               }
               return conv
             }))
+
+            // Add error to debug logs
+            setDebugLogs(prev => [...prev, {
+              type: 'error-state',
+              timestamp,
+              error: parsed.message || 'Unknown error occurred'
+            }])
+
             eventSource.close()
             setLoading(false)
           }
         }
 
         eventSource.onerror = (error) => {
-          setDebugLogs(prev => [...prev, { type: 'sse-error', error: error.toString() }])
+          const timestamp = new Date().toISOString()
+          setDebugLogs(prev => [...prev, { 
+            type: 'sse-error', 
+            timestamp,
+            error: error.toString() 
+          }])
           eventSource.close()
           setLoading(false)
         }
       }
     } catch (err) {
-      setDebugLogs(prev => [...prev, { type: 'fetch-error', error: err.toString() }])
+      const timestamp = new Date().toISOString()
+      setDebugLogs(prev => [...prev, { 
+        type: 'fetch-error', 
+        timestamp,
+        error: err.toString() 
+      }])
       console.error("Error submitting query:", err)
       setLoading(false)
     }
@@ -220,16 +309,25 @@ function App() {
   const handleDownloadDebug = () => {
     const debugData = {
       timestamp: new Date().toISOString(),
-      conversation: currentConversation,
-      debugLogs,
-      thinking
+      conversation: {
+        ...currentConversation,
+        currentState: {
+          thinking,
+          loading,
+          completed: currentConversation?.completed
+        }
+      },
+      debugLogs: debugLogs.map(log => ({
+        ...log,
+        parsed: log.type === 'sse-event' ? JSON.parse(log.data) : undefined
+      }))
     }
     
     const blob = new Blob([JSON.stringify(debugData, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `debug-log-${currentConversation?.id ?? 'no-conversation'}-${new Date().toISOString()}.json`
+    a.download = `debug-log-${currentConversation?.id ?? 'no-conversation'}-${new Date().toISOString().replace(/:/g, '_')}.json`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -498,12 +596,12 @@ function App() {
                       <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent"></div>
                       <span className="text-sm text-muted-foreground">Thinking...</span>
                     </div>
-                    {thinking.length > 0 && (
+                    {thinking.filter(Boolean).length > 0 && (
                       <div className="mt-4 space-y-2">
-                        {thinking.map((step, idx) => (
+                        {thinking.filter(Boolean).map((step, idx) => (
                           <div key={idx} className="text-sm text-muted-foreground">
-                            <span className="font-medium">Step {step.step}:</span>{" "}
-                            <span>{step.trackers?.actionState?.action}</span>
+                            <span className="font-medium">{step.formattedStep}</span>{" "}
+                            <span>{step.formattedAction}</span>
                           </div>
                         ))}
                       </div>
