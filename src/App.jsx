@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTheme } from 'next-themes'
-import { Moon, Sun, Menu, X, Plus, Trash2, ArrowLeft } from 'lucide-react'
+import { Moon, Sun, Menu, X, Plus, Trash2, ArrowLeft, Download } from 'lucide-react'
 import { v4 as uuidv4 } from 'uuid'
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -37,6 +37,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [showSidebar, setShowSidebar] = useState(true)
   const isDesktop = window.innerWidth >= 1024 // lg breakpoint
+  const [debugLogs, setDebugLogs] = useState([])
 
   // Handle mounting and initialization
   useEffect(() => {
@@ -128,6 +129,7 @@ function App() {
     setThinking([])
     setShowThinking(false)
     setLoading(true)
+    setDebugLogs([]) // Reset debug logs for new query
 
     try {
       const res = await fetch('http://localhost:3000/api/v1/query', {
@@ -140,11 +142,13 @@ function App() {
         })
       })
       const data = await res.json()
+      setDebugLogs(prev => [...prev, { type: 'initial-response', data }])
 
       if (data.requestId) {
         const eventSource = new EventSource(`http://localhost:3000/api/v1/stream/${data.requestId}`)
         
         eventSource.onmessage = (event) => {
+          setDebugLogs(prev => [...prev, { type: 'sse-event', data: event.data }])
           const parsed = JSON.parse(event.data)
           
           if (parsed.type === "progress") {
@@ -200,15 +204,36 @@ function App() {
           }
         }
 
-        eventSource.onerror = () => {
+        eventSource.onerror = (error) => {
+          setDebugLogs(prev => [...prev, { type: 'sse-error', error: error.toString() }])
           eventSource.close()
           setLoading(false)
         }
       }
     } catch (err) {
+      setDebugLogs(prev => [...prev, { type: 'fetch-error', error: err.toString() }])
       console.error("Error submitting query:", err)
       setLoading(false)
     }
+  }
+
+  const handleDownloadDebug = () => {
+    const debugData = {
+      timestamp: new Date().toISOString(),
+      conversation: currentConversation,
+      debugLogs,
+      thinking
+    }
+    
+    const blob = new Blob([JSON.stringify(debugData, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `debug-log-${currentConversation?.id ?? 'no-conversation'}-${new Date().toISOString()}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   // Don't render anything until mounted
@@ -388,19 +413,31 @@ function App() {
               )}
               <h1 className="text-xl font-semibold">Deep Research</h1>
             </div>
-            {!isDesktop && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              >
-                {theme === 'dark' ? (
-                  <Sun className="h-4 w-4" />
-                ) : (
-                  <Moon className="h-4 w-4" />
-                )}
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {debugLogs.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={handleDownloadDebug}
+                  title="Download debug logs"
+                >
+                  <Download className="h-4 w-4" />
+                </Button>
+              )}
+              {!isDesktop && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                >
+                  {theme === 'dark' ? (
+                    <Sun className="h-4 w-4" />
+                  ) : (
+                    <Moon className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
+            </div>
           </header>
           <Separator />
 
