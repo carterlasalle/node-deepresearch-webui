@@ -6,9 +6,26 @@ A modern, React-based chat interface for interacting with the deep-research API.
 
 - Real-time chat interface with animated message bubbles
 - Server-Sent Events (SSE) for live "thinking" updates
+- Full Markdown support in bot responses (GitHub Flavored Markdown)
 - Expandable progress details with smooth animations
 - Modern, responsive design
 - Error handling and loading states
+- Debug logs download capability
+
+## Markdown Support
+
+The chat interface supports full GitHub Flavored Markdown in bot responses, including:
+
+- Headers (h1-h6)
+- Lists (ordered and unordered)
+- Code blocks with syntax highlighting
+- Tables
+- Task lists
+- Blockquotes
+- Links (automatically open in new tabs)
+- Images
+- Bold and italic text
+- And more!
 
 ## Prerequisites
 
@@ -59,6 +76,7 @@ The built files will be in the `dist` directory.
 
 - React
 - Vite
+- react-markdown with remark-gfm
 - CSS3 with animations
 - Server-Sent Events (SSE)
 
